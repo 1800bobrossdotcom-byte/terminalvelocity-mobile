@@ -22,14 +22,38 @@
     <!-- The audio-reactive monitor canvas sits over the BG. -->
     <canvas id="viz" class="viz"></canvas>
 
-    <!-- HUD: minimal source picker + level meter. -->
-    <div id="hud" class="hud">
+    <!-- HUD: source picker + VJ params. Tap [≡] to collapse. -->
+    <div id="hud" class="hud" data-collapsed="false">
       <div class="hud-row">
         <button id="src-mic"  class="btn">MIC</button>
         <button id="src-file" class="btn">FILE</button>
         <input id="file-input" type="file" accept="audio/*" hidden />
         <span id="src-label" class="lbl">— no audio —</span>
+        <button id="hud-toggle" class="btn icon" title="hide HUD">≡</button>
       </div>
+
+      <div class="hud-row hud-vj">
+        <button id="mode-prev"  class="btn small">◀</button>
+        <span   id="mode-name"  class="badge">MODE: PULSE</span>
+        <button id="mode-next"  class="btn small">▶</button>
+
+        <button id="pal-prev"   class="btn small">◀</button>
+        <span   id="pal-name"   class="badge">PAL: PHOSPHOR</span>
+        <button id="pal-next"   class="btn small">▶</button>
+
+        <button id="auto-toggle" class="btn small">AUTO</button>
+        <span   id="beat-dot"    class="dot"></span>
+        <span   id="bpm-label"   class="badge">BPM —</span>
+      </div>
+
+      <div class="hud-row sliders">
+        <label>DENSITY  <input id="p-density"  type="range" min="0" max="100" value="70"></label>
+        <label>DECAY    <input id="p-decay"    type="range" min="0" max="100" value="50"></label>
+        <label>BEAT     <input id="p-beat"     type="range" min="0" max="200" value="100"></label>
+        <label>GLOW     <input id="p-glow"     type="range" min="0" max="100" value="60"></label>
+        <label>SCAN     <input id="p-scan"     type="range" min="0" max="100" value="50"></label>
+      </div>
+
       <canvas id="meter" class="meter" width="320" height="22"></canvas>
     </div>
 
