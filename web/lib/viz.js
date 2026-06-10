@@ -53,16 +53,19 @@
   }
 
   // ───────────── public params ─────────────
+  // Defaults tuned for projection / out-of-box VJ use — bright,
+  // beat-sensitive, AUTO cycling on, scanlines tame so the BG video
+  // stays readable.
   const params = {
     mode:       "PULSE",
     palette:    "PHOSPHOR",
-    density:    0.7,        // 0..1 affects element count per mode
-    decay:      0.5,        // 0..1, higher = shorter trails
-    beatSens:   1.0,        // 0..2 multiplier on onset reactivity
-    glow:       0.6,        // 0..1 additive bloom weight
-    scanlines:  0.5,        // 0..1 CRT scanline opacity
-    auto:       false,      // auto cycle modes
-    autoMs:     18000,      // cycle interval ms
+    density:    0.75,
+    decay:      0.45,
+    beatSens:   1.4,
+    glow:       0.75,
+    scanlines:  0.25,
+    auto:       true,
+    autoMs:     14000,
   };
   const MODE_NAMES = ["SHARDS", "PULSE", "FIELD", "TUNNEL", "MOSAIC", "STROBE"];
 
@@ -88,11 +91,11 @@
     const w = cvs.width, h = cvs.height;
     if (!cachedVignette) {
       const g = ctx.createRadialGradient(
-        w/2, h/2, Math.min(w,h) * 0.30,
+        w/2, h/2, Math.min(w,h) * 0.35,
         w/2, h/2, Math.max(w,h) * 0.85,
       );
       g.addColorStop(0, "rgba(0,0,0,0)");
-      g.addColorStop(1, "rgba(0,0,0,0.70)");
+      g.addColorStop(1, "rgba(0,0,0,0.40)");
       cachedVignette = g;
     }
     ctx.fillStyle = cachedVignette;
@@ -110,6 +113,68 @@
     ctx.globalAlpha = 1;
   }
 
+  // ───────────── idle envelope ─────────────
+  // No audio source picked, or source is dead silent? Synthesize a moving
+  // envelope so the stage stays alive. A 110 BPM phantom-kick fires onset
+  // every ~545 ms; sine-modulated bands keep continuous motion. The moment
+  // TV_AUDIO is active AND returning non-zero levels, the real signal
+  // takes over inside readEnvelope().
+  const SYNTH_BPM = 110;
+  const SYNTH_PERIOD = 60000 / SYNTH_BPM;
+  let lastSynthBeat = 0;
+  function synthEnvelope(now) {
+    const t = now * 0.001;
+    const beat = (now - lastSynthBeat) >= SYNTH_PERIOD;
+    if (beat) lastSynthBeat = now;
+    const sb = 0.45 + 0.45 * Math.max(0, Math.sin(t * 0.7));
+    const b  = 0.35 + 0.45 * Math.max(0, Math.sin(t * 1.4));
+    const m  = 0.30 + 0.40 * (0.5 + 0.5 * Math.sin(t * 2.1 + 1.2));
+    const tr = 0.25 + 0.40 * (0.5 + 0.5 * Math.sin(t * 3.3 + 2.4));
+    const air= 0.20 + 0.35 * (0.5 + 0.5 * Math.sin(t * 4.7 + 0.5));
+    return {
+      subBass: sb, bass: b, lowMid: m * 0.8, mid: m, highMid: (m + tr) * 0.5,
+      treble: tr, air,
+      dSub:  beat ? 0.30 : 0, dBass: beat ? 0.35 : 0,
+      dMid:  beat ? 0.18 : 0, dTreb: beat ? 0.10 : 0, dAir: 0,
+      rms:   0.30 + 0.20 * Math.sin(t * 0.5),
+      peak:  beat ? 0.9 : 0.4,
+      centroid: 0.35 + 0.25 * Math.sin(t * 0.9),
+      onset: beat, onsetEnergy: beat ? 1.6 : 0,
+      bpm: SYNTH_BPM,
+      beatPhase: ((now - lastSynthBeat) / SYNTH_PERIOD) % 1,
+      _synth: true,
+    };
+  }
+
+  // Synthetic FFT so MOSAIC + PULSE petals stay alive without input.
+  const SYNTH_FFT = new Uint8Array(512);
+  function synthFft(now) {
+    const t = now * 0.001;
+    for (let i = 0; i < SYNTH_FFT.length; i++) {
+      const f = i / SYNTH_FFT.length;
+      const env = (1 - f) * 0.6 + 0.4;
+      const wob = 0.5 + 0.5 * Math.sin(t * (1 + f * 4) + i * 0.07);
+      const beat = Math.max(0, 1 - ((now - lastSynthBeat) / 220)) * (1 - f) * 0.5;
+      SYNTH_FFT[i] = Math.min(255, ((env * wob * 0.55 + beat) * 255) | 0);
+    }
+    return SYNTH_FFT;
+  }
+
+  // Reads the real envelope if a live source is present, otherwise the
+  // synthetic one. The returned `fft` always exists so modes don't have
+  // to guard. `synth` is true when we made it up.
+  let liveFftRef = null;
+  function readEnvelope(now) {
+    const live = window.TV_AUDIO && window.TV_AUDIO.active
+      ? window.TV_AUDIO.tick()
+      : null;
+    if (live && (live.rms > 0.005 || live.bass > 0.005 || live.mid > 0.005)) {
+      liveFftRef = window.TV_AUDIO.fft;
+      return { env: live, fft: liveFftRef, synth: false };
+    }
+    return { env: synthEnvelope(now), fft: synthFft(now), synth: true };
+  }
+
   // ───────────── MODE: SHARDS ─────────────
   function drawShards(a, pal, now) {
     const w = cvs.width, h = cvs.height;
@@ -117,11 +182,11 @@
     const cell = Math.max(28, Math.floor(min / 18));
     const cols = Math.ceil(w / cell), rows = Math.ceil(h / cell);
 
-    if (a.bass > 0.18) {
+    if (a.bass > 0.04) {
       srand((now * 0.13) | 0);
-      const count = 1 + ((a.bass * 4 * params.density) | 0);
+      const count = 2 + ((a.bass * 8 * params.density) | 0);
       ctx.globalCompositeOperation = "screen";
-      ctx.fillStyle = rgba(pal[0], 0.05 + 0.25 * a.bass);
+      ctx.fillStyle = rgba(pal[0], 0.08 + 0.45 * a.bass);
       for (let i = 0; i < count; i++) {
         const cx = rnd() * w, cy = rnd() * h;
         const rw = w * (0.25 + 0.5 * rnd());
@@ -131,11 +196,11 @@
       ctx.globalCompositeOperation = "source-over";
     }
 
-    if (a.mid > 0.10) {
+    if (a.mid > 0.03) {
       srand(((now * 0.31) | 0) ^ 0xa5a5);
-      const shards = 4 + ((a.mid * 24 * params.density) | 0);
+      const shards = 8 + ((a.mid * 40 * params.density) | 0);
       ctx.globalCompositeOperation = "lighter";
-      ctx.fillStyle = rgba(pal[1], 0.06 + 0.18 * a.mid);
+      ctx.fillStyle = rgba(pal[1], 0.10 + 0.30 * a.mid);
       for (let i = 0; i < shards; i++) {
         const cx = ((rnd() * cols) | 0) * cell;
         const cy = ((rnd() * rows) | 0) * cell;
@@ -146,13 +211,13 @@
       ctx.globalCompositeOperation = "source-over";
     }
 
-    if (a.treble > 0.08) {
+    if (a.treble > 0.02) {
       srand(((now * 0.97) | 0) ^ 0x5a5a);
-      const pts = 8 + ((a.treble * 80 * params.density) | 0);
-      ctx.fillStyle = rgba(pal[2], 0.6 * a.treble);
+      const pts = 16 + ((a.treble * 140 * params.density) | 0);
+      ctx.fillStyle = rgba(pal[2], 0.7 * (0.25 + a.treble));
       for (let i = 0; i < pts; i++) {
         const x = rnd() * w, y = rnd() * h;
-        const r = 1 + rnd() * 2.5 * dpr;
+        const r = 1 + rnd() * 3 * dpr;
         ctx.fillRect(x, y, r, r);
       }
     }
@@ -160,18 +225,18 @@
 
   // ───────────── MODE: PULSE (radial rings on beat) ─────────────
   const pulseRings = [];
-  function drawPulse(a, pal, now) {
+  function drawPulse(a, pal, now, fft) {
     const w = cvs.width, h = cvs.height;
     const cx = w / 2, cy = h / 2;
 
-    if (a.onset || a.dBass > 0.12) {
+    if (a.onset || a.dBass > 0.06) {
       pulseRings.push({
         born: now,
-        color: a.dBass > 0.12 ? pal[0] : pal[1],
+        color: a.dBass > 0.06 ? pal[0] : pal[1],
         seedAngle: (now * 0.001) % (Math.PI * 2),
-        thickness: 4 + 12 * (a.onsetEnergy || a.dBass) * params.beatSens,
+        thickness: 6 + 18 * (a.onsetEnergy || a.dBass + 0.4) * params.beatSens,
       });
-      if (pulseRings.length > 24) pulseRings.shift();
+      if (pulseRings.length > 28) pulseRings.shift();
     }
 
     ctx.globalCompositeOperation = "lighter";
@@ -180,7 +245,7 @@
       const age = (now - ring.born) / 1000;
       if (age > 2.5) { pulseRings.splice(i, 1); continue; }
       const r = age * Math.max(w, h) * 0.6;
-      const alpha = Math.max(0, 0.55 * (1 - age / 2.5));
+      const alpha = Math.max(0, 0.70 * (1 - age / 2.5));
       ctx.lineWidth = ring.thickness * (1 - age / 2.5);
       ctx.strokeStyle = rgba(ring.color, alpha);
       ctx.beginPath();
@@ -190,23 +255,22 @@
     ctx.globalCompositeOperation = "source-over";
 
     // Spectrum petals around the center (FFT-driven polar bars).
-    const fft = window.TV_AUDIO && window.TV_AUDIO.fft;
     if (fft && fft.length) {
-      const bins = 64;
-      const step = Math.floor(Math.min(360, fft.length) / bins);
-      const baseR = Math.min(w, h) * 0.12;
-      const maxR = Math.min(w, h) * 0.32 * (0.6 + 0.6 * params.density);
+      const bins = 72;
+      const step = Math.max(1, Math.floor(Math.min(360, fft.length) / bins));
+      const baseR = Math.min(w, h) * 0.10;
+      const maxR = Math.min(w, h) * 0.40 * (0.6 + 0.6 * params.density);
       ctx.globalCompositeOperation = "lighter";
       for (let i = 0; i < bins; i++) {
         let v = 0;
         for (let j = 0; j < step; j++) v += fft[i * step + j] || 0;
         v = v / (step * 255);
-        if (v < 0.03) continue;
+        if (v < 0.015) continue;
         const ang = (i / bins) * Math.PI * 2 + a.beatPhase * Math.PI * 0.25;
         const r0 = baseR, r1 = baseR + maxR * v;
         const c = lerpColor(pal[0], pal[2], i / bins);
-        ctx.strokeStyle = rgba(c, 0.35 + 0.5 * v);
-        ctx.lineWidth = 2 * dpr;
+        ctx.strokeStyle = rgba(c, 0.45 + 0.5 * v);
+        ctx.lineWidth = 3 * dpr;
         ctx.beginPath();
         ctx.moveTo(cx + Math.cos(ang) * r0, cy + Math.sin(ang) * r0);
         ctx.lineTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
@@ -271,7 +335,7 @@
     const maxR = Math.hypot(w, h) * 0.6;
 
     // Spawn a new slice on each beat or on strong sub-bass.
-    if (a.onset || a.dSub > 0.10) {
+    if (a.onset || a.dSub > 0.05) {
       tunnelSlices.push({
         born: now,
         sides: 5 + ((Math.random() * 4) | 0),
@@ -316,9 +380,8 @@
   }
 
   // ───────────── MODE: MOSAIC (FFT-driven cell grid) ─────────────
-  function drawMosaic(a, pal, now) {
+  function drawMosaic(a, pal, now, fft) {
     const w = cvs.width, h = cvs.height;
-    const fft = window.TV_AUDIO && window.TV_AUDIO.fft;
     if (!fft) return;
     const cols = Math.max(8, Math.floor(12 + 24 * params.density));
     const rows = Math.max(8, Math.floor(cols * (h / w)));
@@ -362,15 +425,15 @@
         const x = rnd() * w, y = rnd() * h;
         const ww = w * (0.1 + 0.4 * rnd());
         const hh = h * (0.05 + 0.25 * rnd());
-        ctx.fillStyle = rgba(c, 0.20 + 0.35 * a.onsetEnergy * params.beatSens);
+        ctx.fillStyle = rgba(c, 0.30 + 0.45 * a.onsetEnergy * params.beatSens);
         ctx.fillRect(x - ww/2, y - hh/2, ww, hh);
       }
       ctx.globalCompositeOperation = "source-over";
     }
     // Always pulse a thin centre band on bass (NOT a per-row scan — single rect).
-    if (a.bass > 0.2) {
-      const bh = h * 0.04 * a.bass;
-      ctx.fillStyle = rgba(pal[0], 0.25 * a.bass);
+    if (a.bass > 0.05) {
+      const bh = h * 0.06 * a.bass;
+      ctx.fillStyle = rgba(pal[0], 0.30 * a.bass);
       ctx.fillRect(0, h/2 - bh/2, w, bh);
     }
   }
@@ -389,10 +452,10 @@
   function frame() {
     const now = performance.now();
     t0 = now;
-    const a = (window.TV_AUDIO && window.TV_AUDIO.tick()) ||
-              { bass:0, mid:0, treble:0, rms:0, onset:false, onsetEnergy:0,
-                dBass:0, dMid:0, dTreb:0, dSub:0, dAir:0, subBass:0,
-                lowMid:0, highMid:0, air:0, beatPhase:0, peak:0, centroid:0, bpm:0 };
+
+    const snap = readEnvelope(now);
+    const a = snap.env;
+    const fft = snap.fft;
 
     const pal = PALETTES[params.palette] || PALETTES.PHOSPHOR;
 
@@ -402,18 +465,18 @@
 
     switch (params.mode) {
       case "SHARDS": drawShards(a, pal, now); break;
-      case "PULSE":  drawPulse (a, pal, now); break;
+      case "PULSE":  drawPulse (a, pal, now, fft); break;
       case "FIELD":  drawField (a, pal, now); break;
       case "TUNNEL": drawTunnel(a, pal, now); break;
-      case "MOSAIC": drawMosaic(a, pal, now); break;
+      case "MOSAIC": drawMosaic(a, pal, now, fft); break;
       case "STROBE": drawStrobe(a, pal, now); break;
-      default:       drawPulse (a, pal, now); break;
+      default:       drawPulse (a, pal, now, fft); break;
     }
 
     // Onset-triggered chromatic flash (cheap fullscreen tint).
     if (a.onset && params.glow > 0) {
       ctx.globalCompositeOperation = "lighter";
-      ctx.fillStyle = rgba(pal[3], 0.05 * params.glow * Math.min(1, a.onsetEnergy));
+      ctx.fillStyle = rgba(pal[3], 0.06 * params.glow * Math.min(1, a.onsetEnergy));
       ctx.fillRect(0, 0, cvs.width, cvs.height);
       ctx.globalCompositeOperation = "source-over";
     }
