@@ -210,3 +210,14 @@ html, body {
 .hud[data-collapsed="true"] .lbl {
   display: none;
 }
+
+.build-banner {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  padding: 4px 8px;
+  background: var(--phosphor);
+  color: #000;
+  border-radius: 2px;
+  font-weight: bold;
+  text-align: center;
+}

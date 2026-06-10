@@ -6,15 +6,18 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.WindowManager;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
 
 import com.getcapacitor.BridgeActivity;
 
 /**
  * Prevents Android from putting the system into MODE_IN_COMMUNICATION
- * once the WebView opens the microphone. That mode downsamples speaker
- * output to a narrow voice profile and is the reason mic-fed audio
- * sources (e.g. Spotify on the same phone) sound tinny / crunchy while
- * the visualizer is running.
+ * once the WebView opens the microphone (which downsamples speaker
+ * output to a tinny voice profile).
+ *
+ * Also disables the WebView's HTTP cache so reinstalled APKs always
+ * load fresh JS/CSS instead of leftover bytes from the previous build.
  */
 public class MainActivity extends BridgeActivity {
 
@@ -39,6 +42,17 @@ public class MainActivity extends BridgeActivity {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
+
+        try {
+            WebView wv = (WebView) this.bridge.getWebView();
+            if (wv != null) {
+                WebSettings s = wv.getSettings();
+                s.setCacheMode(WebSettings.LOAD_NO_CACHE);
+                s.setDomStorageEnabled(true);
+                s.setMediaPlaybackRequiresUserGesture(false);
+                wv.clearCache(true);
+            }
+        } catch (Throwable ignored) {}
     }
 
     @Override
