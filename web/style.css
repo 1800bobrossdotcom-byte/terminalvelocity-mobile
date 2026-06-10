@@ -50,16 +50,21 @@ html, body {
   left: 10px;
   bottom: calc(env(safe-area-inset-bottom, 0) + 10px);
   right: 10px;
-  z-index: 2;
+  z-index: 10;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 8px 10px;
+  padding: 10px 12px;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 2px;
   backdrop-filter: blur(4px);
+  pointer-events: auto;
+  touch-action: manipulation;
+  max-height: 60vh;
+  overflow-y: auto;
 }
+.hud * { pointer-events: auto; }
 
 .hud-row {
   display: flex;
@@ -74,10 +79,14 @@ html, body {
   border: 1px solid var(--phosphor);
   border-radius: 2px;
   font: inherit;
-  padding: 6px 12px;
+  padding: 8px 14px;
   letter-spacing: 0.12em;
   cursor: pointer;
   touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  min-height: 36px;
+  min-width: 36px;
 }
 .btn:active { background: rgba(51, 255, 102, 0.15); }
 .btn[aria-pressed="true"] {
@@ -106,9 +115,10 @@ html, body {
 }
 
 .btn.small {
-  padding: 4px 8px;
+  padding: 6px 10px;
   font-size: 10px;
   letter-spacing: 0.08em;
+  min-height: 32px;
 }
 .btn.icon {
   padding: 4px 10px;
@@ -142,20 +152,38 @@ html, body {
 .sliders input[type="range"] {
   width: 100%;
   -webkit-appearance: none;
+  appearance: none;
   background: transparent;
-  height: 16px;
+  height: 32px;
   margin: 0;
+  touch-action: manipulation;
 }
 .sliders input[type="range"]::-webkit-slider-runnable-track {
-  height: 2px;
+  height: 4px;
   background: rgba(51, 255, 102, 0.35);
+  border-radius: 2px;
 }
 .sliders input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
-  height: 14px; width: 8px;
+  appearance: none;
+  height: 26px; width: 16px;
   background: var(--phosphor);
-  border: none;
-  margin-top: -6px;
+  border: 1px solid #000;
+  border-radius: 2px;
+  margin-top: -11px;
+  box-shadow: 0 0 6px var(--phosphor);
+}
+.sliders input[type="range"]::-moz-range-track {
+  height: 4px;
+  background: rgba(51, 255, 102, 0.35);
+  border-radius: 2px;
+}
+.sliders input[type="range"]::-moz-range-thumb {
+  height: 26px; width: 16px;
+  background: var(--phosphor);
+  border: 1px solid #000;
+  border-radius: 2px;
+  box-shadow: 0 0 6px var(--phosphor);
 }
 
 .dot {
