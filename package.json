@@ -1,0 +1,27 @@
+{
+  "name": "terminalvelocity-mobile",
+  "version": "0.1.0",
+  "description": "TERMINAL VELOCITY visualizer — Capacitor mobile build (Android + iOS).",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build-web.mjs",
+    "sync": "npm run build && cap sync",
+    "android": "npm run sync && cap open android",
+    "android:run": "npm run sync && cap run android",
+    "ios": "npm run sync && cap open ios",
+    "ios:run": "npm run sync && cap run ios",
+    "compress:videos": "powershell -ExecutionPolicy Bypass -File scripts/compress-assets.ps1"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/filesystem": "^6.0.3",
+    "@capacitor/ios": "^6.2.0",
+    "@capacitor/splash-screen": "^6.0.3",
+    "@capacitor/status-bar": "^6.0.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.0",
+    "typescript": "^6.0.3"
+  }
+}

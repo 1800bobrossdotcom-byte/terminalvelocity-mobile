@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+    <meta name="theme-color" content="#000000" />
+    <title>TERMINAL VELOCITY</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <!-- Background looping video (compressed footage). -->
+    <video
+      id="bg-video"
+      class="bg"
+      autoplay
+      muted
+      loop
+      playsinline
+      preload="auto"
+    ></video>
+
+    <!-- The audio-reactive monitor canvas sits over the BG. -->
+    <canvas id="viz" class="viz"></canvas>
+
+    <!-- HUD: minimal source picker + level meter. -->
+    <div id="hud" class="hud">
+      <div class="hud-row">
+        <button id="src-mic"  class="btn">MIC</button>
+        <button id="src-file" class="btn">FILE</button>
+        <input id="file-input" type="file" accept="audio/*" hidden />
+        <span id="src-label" class="lbl">— no audio —</span>
+      </div>
+      <canvas id="meter" class="meter" width="320" height="22"></canvas>
+    </div>
+
+    <script src="lib/audio.js"></script>
+    <script src="lib/viz.js"></script>
+    <script src="main.js"></script>
+  </body>
+</html>

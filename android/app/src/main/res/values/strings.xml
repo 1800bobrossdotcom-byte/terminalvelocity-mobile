@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">TERMINAL VELOCITY</string>
+    <string name="title_activity_main">TERMINAL VELOCITY</string>
+    <string name="package_name">cam.terminalvelocity.mobile</string>
+    <string name="custom_url_scheme">cam.terminalvelocity.mobile</string>
+</resources>

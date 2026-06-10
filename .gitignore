@@ -1,0 +1,35 @@
+node_modules/
+.DS_Store
+Thumbs.db
+*.log
+.env
+.env.local
+
+# Capacitor / Android
+android/.gradle/
+android/local.properties
+android/app/build/
+android/app/release/
+android/app/debug/
+android/build/
+android/captures/
+android/.idea/
+android/.cxx/
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+
+# iOS
+ios/App/build/
+ios/App/Pods/
+ios/App/output/
+ios/App/App/public/
+ios/App/App/capacitor.config.json
+ios/App/App/config.xml
+ios/DerivedData/
+*.xcuserstate
+
+# keystore / signing
+*.keystore
+*.jks
+keystore-password.txt
