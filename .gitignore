@@ -36,3 +36,4 @@ ios/DerivedData/
 *.keystore
 *.jks
 keystore-password.txt
+*.apk
