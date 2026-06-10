@@ -11,14 +11,16 @@
  * confirm at a glance which APK is actually loaded and whether any tap
  * is reaching JS at all.
  */
-const BUILD_ID = "0.2.2";
+const BUILD_ID = "0.2.3";
 
 (function () {
   // ───────────── global error surfacing ─────────────
+  // Errors go to a wrapping line in the HUD so the FULL message is
+  // readable on a phone screen (the old #src-label truncated it).
   function showError(prefix, err) {
-    const node = document.getElementById("src-label");
-    const msg = "ERR " + prefix + ": " + (err && err.message ? err.message : String(err));
-    if (node) node.textContent = msg;
+    const node = document.getElementById("err-line");
+    const msg = prefix + ": " + (err && err.message ? err.message : String(err));
+    if (node) { node.textContent = "ERR " + msg; node.classList.add("on"); }
     try { console.error(prefix, err); } catch (_) {}
   }
   window.addEventListener("error", (e) => showError("uncaught", e.error || e.message));
@@ -114,7 +116,7 @@ const BUILD_ID = "0.2.2";
   }
 
   onClick("MIC", btnMic, async () => {
-    if (!window.TV_AUDIO) throw new Error("TV_AUDIO missing");
+    if (!window.TV_AUDIO) throw new Error("audio module missing (TV_AUDIO)");
     await window.TV_AUDIO.useMic();
     setPressed(btnMic, true);
     setPressed(btnFile, false);
@@ -127,6 +129,7 @@ const BUILD_ID = "0.2.2";
       const f = fileIn.files && fileIn.files[0];
       if (!f) return;
       try {
+        if (!window.TV_AUDIO) throw new Error("audio module missing (TV_AUDIO)");
         await window.TV_AUDIO.useFile(f);
         setPressed(btnMic, false);
         setPressed(btnFile, true);
@@ -135,18 +138,23 @@ const BUILD_ID = "0.2.2";
     });
   }
 
-  onClick("MODE-", modePrev, () => { window.TV_VIZ.cycleMode(-1); refreshVjBadges(); });
-  onClick("MODE+", modeNext, () => { window.TV_VIZ.cycleMode(+1); refreshVjBadges(); });
-  onClick("PAL-",  palPrev,  () => { window.TV_VIZ.cyclePalette(-1); refreshVjBadges(); });
-  onClick("PAL+",  palNext,  () => { window.TV_VIZ.cyclePalette(+1); refreshVjBadges(); });
-  onClick("AUTO",  autoBtn,  () => { window.TV_VIZ.toggleAuto(); refreshVjBadges(); });
+  function vizCall(name, fn) {
+    if (!window.TV_VIZ) { showError(name, new Error("viz module missing (TV_VIZ)")); return; }
+    fn(window.TV_VIZ);
+    refreshVjBadges();
+  }
+  onClick("MODE-", modePrev, () => vizCall("MODE-", (v) => v.cycleMode(-1)));
+  onClick("MODE+", modeNext, () => vizCall("MODE+", (v) => v.cycleMode(+1)));
+  onClick("PAL-",  palPrev,  () => vizCall("PAL-",  (v) => v.cyclePalette(-1)));
+  onClick("PAL+",  palNext,  () => vizCall("PAL+",  (v) => v.cyclePalette(+1)));
+  onClick("AUTO",  autoBtn,  () => vizCall("AUTO",  (v) => v.toggleAuto()));
 
   function bindSlider(name, input, key, scale) {
-    if (!input) { showError("missing slider " + name, new Error("not found")); return; }
+    if (!input) { showError("slider " + name, new Error("element not found")); return; }
     const apply = () => {
       try {
+        if (!window.TV_VIZ || !window.TV_VIZ.params) return; // not ready yet — fine
         window.TV_VIZ.params[key] = (+input.value) / 100 * scale;
-        bump("slider:" + name + "=" + input.value);
       } catch (err) { showError("slider " + name, err); }
     };
     input.addEventListener("input",  apply);

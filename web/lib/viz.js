@@ -190,7 +190,7 @@
     ctx.globalCompositeOperation = "source-over";
 
     // Spectrum petals around the center (FFT-driven polar bars).
-    const fft = window.TV_AUDIO.fft;
+    const fft = window.TV_AUDIO && window.TV_AUDIO.fft;
     if (fft && fft.length) {
       const bins = 64;
       const step = Math.floor(Math.min(360, fft.length) / bins);
@@ -318,7 +318,7 @@
   // ───────────── MODE: MOSAIC (FFT-driven cell grid) ─────────────
   function drawMosaic(a, pal, now) {
     const w = cvs.width, h = cvs.height;
-    const fft = window.TV_AUDIO.fft;
+    const fft = window.TV_AUDIO && window.TV_AUDIO.fft;
     if (!fft) return;
     const cols = Math.max(8, Math.floor(12 + 24 * params.density));
     const rows = Math.max(8, Math.floor(cols * (h / w)));
