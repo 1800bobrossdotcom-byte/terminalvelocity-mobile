@@ -11,7 +11,7 @@
  * confirm at a glance which APK is actually loaded and whether any tap
  * is reaching JS at all.
  */
-const BUILD_ID = "0.2.4";
+const BUILD_ID = "0.2.6";
 
 (function () {
   // ───────────── global error surfacing ─────────────

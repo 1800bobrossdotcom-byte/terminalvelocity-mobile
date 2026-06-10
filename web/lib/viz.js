@@ -21,6 +21,29 @@
   const ctx = cvs.getContext("2d", { alpha: true });
   const dpr = Math.min(2, window.devicePixelRatio || 1);
 
+  // Background video element — we pull pixels off it directly each frame
+  // so the FX can actually mutate the imagery (Asendorf sort, Gysin ASCII,
+  // halftone). The <video> tag in index.html stays visible at opacity 0.001
+  // so it keeps decoding without painting over the canvas.
+  const bgVideo = document.getElementById("bg-video");
+  if (bgVideo) {
+    bgVideo.style.opacity = "0.001";
+    bgVideo.style.pointerEvents = "none";
+  }
+
+  // Offscreen low-res buffer for video sampling — keeps ASCII / SORT /
+  // HALFTONE in real-time territory on mid-range Android.
+  const lowW = 320, lowH = 180;
+  const low = document.createElement("canvas");
+  low.width = lowW; low.height = lowH;
+  const lowCtx = low.getContext("2d", { willReadFrequently: true });
+
+  // Declared up here because resize() touches it on first call, which
+  // happens before its `let cachedVignette = null;` would have run in
+  // source order — TDZ would throw and the whole IIFE would die before
+  // attaching window.TV_VIZ.
+  let cachedVignette = null;
+
   function resize() {
     cvs.width  = Math.floor(window.innerWidth  * dpr);
     cvs.height = Math.floor(window.innerHeight * dpr);
@@ -67,7 +90,22 @@
     auto:       true,
     autoMs:     14000,
   };
-  const MODE_NAMES = ["SHARDS", "PULSE", "FIELD", "TUNNEL", "MOSAIC", "STROBE"];
+  const MODE_NAMES = [
+    "ASCII",     // Gysin character grid (luminance → monospace chars)
+    "SORT",      // Asendorf vertical column pixel-sort, bass-keyed
+    "HALFTONE",  // luminance → dot grid
+    "DATAMOSH",  // rectangular region freeze (no per-row displacement)
+    "ZRUSH",     // 3D streaks flying toward camera + zoom underlay
+    "PULSE",     // radial rings + spectrum petals over video
+    "SHARDS",    // band slabs + grid shards over video
+    "FIELD",     // flow-field particles
+    "TUNNEL",    // zooming polygons
+    "MOSAIC",    // FFT cell grid
+    "STROBE",    // onset block flashes
+  ];
+  // Modes that REPLACE the canvas with processed video pixels each frame
+  // skip the trail-fade and the bg-video underlay draw.
+  const PROCESS_MODES = new Set(["ASCII", "SORT", "HALFTONE", "DATAMOSH", "ZRUSH"]);
 
   // ───────────── deterministic pRNG ─────────────
   let seed = 1;
@@ -75,6 +113,57 @@
   function rnd() {
     seed = (seed * 1664525 + 1013904223) >>> 0;
     return seed / 0xffffffff;
+  }
+
+  // ───────────── video pull ─────────────
+  // Infinite-zoom underlay. We sample `zoomLayers` copies of the current
+  // video frame, each at a progressively larger scale and lower opacity,
+  // and continuously advance their scale on bass + RMS so the audience
+  // feels like they're flying THROUGH the imagery. Phase resets are
+  // staggered so there's never a visible "reset" pop.
+  let zoomPhase = 0;            // 0..1 monotonically increasing, wraps
+  const ZOOM_LAYERS = 4;
+  function drawVideoUnderlay(opacity, a, now) {
+    if (!bgVideo || bgVideo.readyState < 2) return false;
+    const w = cvs.width, h = cvs.height;
+    const vw = bgVideo.videoWidth || 16;
+    const vh = bgVideo.videoHeight || 9;
+    // dt-aware phase advance: base drift + audio injection.
+    const dt = Math.min(50, now - (drawVideoUnderlay._t || now));
+    drawVideoUnderlay._t = now;
+    const speed = 0.00006 * dt * (1 + 3.0 * a.bass + 2.0 * a.rms + 4 * (a.dBass || 0));
+    zoomPhase = (zoomPhase + speed) % 1;
+
+    ctx.save();
+    for (let i = 0; i < ZOOM_LAYERS; i++) {
+      // Each layer's local phase: staggered by 1/ZOOM_LAYERS so the eye
+      // never catches a hard reset.
+      const lp = (zoomPhase + i / ZOOM_LAYERS) % 1;
+      // Scale rises exponentially through the layer's life so closer
+      // layers fill the screen faster — feels like depth.
+      const sc = Math.max(w / vw, h / vh) * Math.pow(2.6, lp) * 1.04;
+      const dw = vw * sc, dh = vh * sc;
+      // Center slightly drifts on mids so the zoom isn't dead-centre.
+      const cxOff = (Math.sin(now * 0.0007 + i) * 0.06) * w * (0.5 + a.mid);
+      const cyOff = (Math.cos(now * 0.0009 + i) * 0.06) * h * (0.5 + a.mid);
+      const dx = (w - dw) / 2 + cxOff;
+      const dy = (h - dh) / 2 + cyOff;
+      // Opacity peaks mid-life, fades at ends so layers never pop in/out.
+      const fade = Math.sin(lp * Math.PI);
+      ctx.globalAlpha = opacity * fade * (i === 0 ? 1.0 : 0.85);
+      ctx.drawImage(bgVideo, dx, dy, dw, dh);
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+    return true;
+  }
+
+  // Pull the current video frame into the low-res offscreen for cheap
+  // pixel-level work. Returns the ImageData or null.
+  function sampleVideo() {
+    if (!bgVideo || bgVideo.readyState < 2) return null;
+    lowCtx.drawImage(bgVideo, 0, 0, lowW, lowH);
+    return lowCtx.getImageData(0, 0, lowW, lowH);
   }
 
   // ───────────── per-frame helpers ─────────────
@@ -86,7 +175,6 @@
     ctx.globalCompositeOperation = "source-over";
   }
 
-  let cachedVignette = null;
   function vignette() {
     const w = cvs.width, h = cvs.height;
     if (!cachedVignette) {
@@ -438,6 +526,296 @@
     }
   }
 
+  // ───────────── MODE: ASCII (Andreas Gysin character grid) ─────────────
+  // Sample the bg-video at low-res, map each cell's luminance to a glyph,
+  // and stamp it in the palette color. Cell size pulses on bass to give a
+  // "breathing" Gysin grid. Optional perspective on onset so the field
+  // tilts and gives a 2.5D feel without a real 3D pipeline.
+  const ASCII_RAMP = " .:-=+*#%@";   // dark → bright
+  const ASCII_RAMP_BRIGHT = " .,-~+=*#%@$";
+  function drawAscii(a, pal, now) {
+    const w = cvs.width, h = cvs.height;
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, w, h);
+    const img = sampleVideo();
+    if (!img) return;
+    const d = img.data;
+
+    // Cell pulses with bass: smaller cells = denser text.
+    const baseCell = 14 - Math.floor(a.bass * 6);  // 8..14 px on screen
+    const cell = Math.max(6, baseCell) * dpr;
+    const cols = Math.floor(w / cell), rows = Math.floor(h / cell);
+
+    // 2.5D tilt: gentle on idle, kicked by onset/dBass.
+    const tilt = (Math.sin(now * 0.0006) * 0.10) + (a.dBass || 0) * 0.5;
+    const zoom = 1 + 0.25 * a.bass;  // breathing grid
+
+    const ramp = a.treble > 0.15 ? ASCII_RAMP_BRIGHT : ASCII_RAMP;
+    const rampN = ramp.length;
+
+    ctx.save();
+    ctx.translate(w/2, h/2);
+    ctx.scale(zoom, zoom * (1 - tilt * 0.3));
+    ctx.transform(1, tilt, 0, 1, 0, 0);
+    ctx.translate(-w/2, -h/2);
+
+    ctx.font = `${cell * 1.05}px ui-monospace, "IBM Plex Mono", monospace`;
+    ctx.textBaseline = "top";
+    ctx.textAlign = "left";
+
+    for (let r = 0; r < rows; r++) {
+      // Sample row band from the low-res video buffer.
+      const vy = Math.min(lowH - 1, Math.floor((r / rows) * lowH));
+      for (let c = 0; c < cols; c++) {
+        const vx = Math.min(lowW - 1, Math.floor((c / cols) * lowW));
+        const idx = (vy * lowW + vx) * 4;
+        const R = d[idx], G = d[idx+1], B = d[idx+2];
+        const L = (R*0.299 + G*0.587 + B*0.114) / 255;
+        if (L < 0.05) continue;
+        const ch = ramp[Math.min(rampN - 1, (L * rampN) | 0)];
+        // Color: low palette colour modulated by mid; high palette colour for sparkles
+        const useHi = (R + G + B) > 540 || L > 0.85;
+        const col = useHi ? pal[2] : lerpColor(pal[0], pal[1], L);
+        ctx.fillStyle = rgba(col, 0.65 + 0.35 * L);
+        ctx.fillText(ch, c * cell, r * cell);
+      }
+    }
+    ctx.restore();
+
+    // Edge bracket flashes on onset — clear Gysin grid border accent.
+    if (a.onset) {
+      ctx.strokeStyle = rgba(pal[3], 0.7);
+      ctx.lineWidth = 3 * dpr;
+      const m = 12 * dpr, len = 60 * dpr;
+      ctx.beginPath();
+      ctx.moveTo(m, m); ctx.lineTo(m + len, m); ctx.moveTo(m, m); ctx.lineTo(m, m + len);
+      ctx.moveTo(w - m, m); ctx.lineTo(w - m - len, m); ctx.moveTo(w - m, m); ctx.lineTo(w - m, m + len);
+      ctx.moveTo(m, h - m); ctx.lineTo(m + len, h - m); ctx.moveTo(m, h - m); ctx.lineTo(m, h - m - len);
+      ctx.moveTo(w - m, h - m); ctx.lineTo(w - m - len, h - m); ctx.moveTo(w - m, h - m); ctx.lineTo(w - m, h - m - len);
+      ctx.stroke();
+    }
+  }
+
+  // ───────────── MODE: SORT (Kim Asendorf column pixel-sort) ─────────────
+  // Pull video → low-res → vertical-column luma-keyed sort runs → upscale.
+  // Sort threshold drops on bass so more of the frame enters runs on hits.
+  // NOTE: this is column-only (vertical) sort, per /memories rule banning
+  // per-row horizontal-band displacement.
+  function asendorfColSort(img, intensity) {
+    if (intensity <= 0.001) return img;
+    const W = img.width, H = img.height;
+    const px32 = new Uint32Array(img.data.buffer);
+    const thr = Math.max(40, Math.min(220, (200 - intensity * 150) | 0));
+    const segMax = Math.max(8, Math.min(H, (40 + intensity * (H - 40)) | 0));
+    const keysAll = new Uint32Array(H);
+    const scratch = new Uint32Array(H);
+    const colStride = intensity > 0.6 ? 1 : intensity > 0.3 ? 2 : 3;
+    for (let x = 0; x < W; x += colStride) {
+      let y = 0;
+      while (y < H) {
+        while (y < H) {
+          const p = px32[y * W + x];
+          const r = p & 0xff, g = (p >>> 8) & 0xff, b = (p >>> 16) & 0xff;
+          const L = (r * 76 + g * 150 + b * 29) >>> 8;
+          if (L > thr) break;
+          y++;
+        }
+        const start = y;
+        while (y < H && (y - start) < segMax) {
+          const p = px32[y * W + x];
+          const r = p & 0xff, g = (p >>> 8) & 0xff, b = (p >>> 16) & 0xff;
+          const L = (r * 76 + g * 150 + b * 29) >>> 8;
+          if (L < thr) break;
+          y++;
+        }
+        const len = y - start;
+        if (len > 1) {
+          const keys = keysAll.subarray(0, len);
+          for (let i = 0; i < len; i++) {
+            const p = px32[(start + i) * W + x];
+            const r = p & 0xff, g = (p >>> 8) & 0xff, b = (p >>> 16) & 0xff;
+            const L = (r * 76 + g * 150 + b * 29) >>> 8;
+            keys[i] = (L << 24) | i;
+          }
+          keys.sort();
+          for (let i = 0; i < len; i++) {
+            scratch[i] = px32[(start + (keys[i] & 0xffffff)) * W + x];
+          }
+          for (let i = 0; i < len; i++) px32[(start + i) * W + x] = scratch[i];
+        }
+      }
+    }
+    return img;
+  }
+  function drawSort(a, pal, now) {
+    const w = cvs.width, h = cvs.height;
+    const img = sampleVideo();
+    if (!img) return;
+    const intensity = Math.min(1, 0.25 + a.bass * 1.4 + a.rms * 0.6);
+    asendorfColSort(img, intensity);
+    lowCtx.putImageData(img, 0, 0);
+    // Upscale to canvas with audio-modulated zoom for 2.5D push.
+    const zoom = 1 + 0.18 * a.bass + 0.12 * Math.sin(now * 0.0008);
+    const dw = w * zoom, dh = h * zoom;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(low, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    ctx.imageSmoothingEnabled = true;
+
+    // Palette tint on hits.
+    if (a.onset && params.glow > 0) {
+      ctx.globalCompositeOperation = "color";
+      ctx.fillStyle = rgba(pal[0], 0.10 + 0.2 * a.onsetEnergy * params.glow);
+      ctx.fillRect(0, 0, w, h);
+      ctx.globalCompositeOperation = "source-over";
+    }
+  }
+
+  // ───────────── MODE: HALFTONE (luminance dot grid) ─────────────
+  function drawHalftone(a, pal, now) {
+    const w = cvs.width, h = cvs.height;
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, w, h);
+    const img = sampleVideo();
+    if (!img) return;
+    const d = img.data;
+    const cell = (12 - Math.floor(a.bass * 4)) * dpr;
+    const cols = Math.floor(w / cell), rows = Math.floor(h / cell);
+    const wobble = 0.20 * Math.sin(now * 0.001) + 0.15 * a.dBass;
+    ctx.fillStyle = rgba(pal[1], 0.95);
+    for (let r = 0; r < rows; r++) {
+      const vy = Math.min(lowH - 1, Math.floor((r / rows) * lowH));
+      for (let c = 0; c < cols; c++) {
+        const vx = Math.min(lowW - 1, Math.floor((c / cols) * lowW));
+        const idx = (vy * lowW + vx) * 4;
+        const L = (d[idx]*0.299 + d[idx+1]*0.587 + d[idx+2]*0.114) / 255;
+        if (L < 0.08) continue;
+        const radius = (cell * 0.5) * (L + wobble * L);
+        ctx.beginPath();
+        ctx.arc(c * cell + cell/2, r * cell + cell/2, Math.max(0.5, radius), 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+    // Big centre dot pulse on onset.
+    if (a.onset) {
+      ctx.fillStyle = rgba(pal[3], 0.25 + 0.4 * a.onsetEnergy);
+      ctx.beginPath();
+      ctx.arc(w/2, h/2, (40 + 120 * a.onsetEnergy) * dpr, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  // ───────────── MODE: DATAMOSH (rectangular region freeze) ─────────────
+  // Cache slabs of the previous video frame and re-stamp them at offset
+  // positions on bass hits. Strictly rectangular regions — no per-row
+  // displacement (memory hard rule).
+  let moshBuf = null;
+  function drawDatamosh(a, pal, now) {
+    const w = cvs.width, h = cvs.height;
+    if (!drawVideoUnderlay(0.92, a, now)) {
+      ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h);
+    }
+    if (!moshBuf || moshBuf.width !== w || moshBuf.height !== h) {
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      moshBuf = c;
+    }
+    const mctx2 = moshBuf.getContext("2d");
+    // On every onset, snapshot the current frame so the next bass-frames
+    // can stamp it as a "frozen" slab.
+    if (a.onset) {
+      mctx2.drawImage(cvs, 0, 0, w, h);
+    }
+    // Continuously stamp 2-6 random rectangular slabs from the last frozen
+    // frame onto the new one, with a small offset that wiggles on mids.
+    const stamps = 2 + ((4 * (a.bass + a.dBass)) | 0);
+    srand((now * 0.7) | 0);
+    ctx.globalCompositeOperation = "source-over";
+    for (let i = 0; i < stamps; i++) {
+      const sw = w * (0.15 + 0.4 * rnd());
+      const sh = h * (0.10 + 0.3 * rnd());
+      const sx = rnd() * (w - sw);
+      const sy = rnd() * (h - sh);
+      const ox = (rnd() - 0.5) * 60 * dpr * (0.5 + a.mid);
+      const oy = (rnd() - 0.5) * 30 * dpr * (0.5 + a.mid);
+      ctx.globalAlpha = 0.6 + 0.4 * a.bass;
+      ctx.drawImage(moshBuf, sx, sy, sw, sh, sx + ox, sy + oy, sw, sh);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ───────────── MODE: Z-RUSH (3D streaks toward camera) ─────────────
+  // Particles fly from a central vanishing point straight at the viewer.
+  // Stronger bass = faster Z-velocity. Onset spawns a burst. Each particle
+  // is a streak: its tail length is its previous (x,y) projection, so we
+  // get the line that "stripes" the viewer's eye.
+  const zParts = [];
+  function spawnZ(n, now) {
+    for (let i = 0; i < n; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      zParts.push({
+        // Polar position in a unit sphere, projected on (x,y).
+        ang,
+        r: 0.03 + Math.random() * 0.25,
+        z: 0.95 + Math.random() * 0.05,      // start near vanishing point
+        zv: 0.012 + Math.random() * 0.015,    // recede speed (toward viewer = z→0)
+        born: now,
+        ci: (Math.random() * 3) | 0,
+      });
+    }
+    if (zParts.length > 600) zParts.splice(0, zParts.length - 600);
+  }
+  function drawZRush(a, pal, now) {
+    const w = cvs.width, h = cvs.height;
+    const cx = w / 2, cy = h / 2;
+    // Underlay video with audio-driven infinite zoom — this is the depth bed.
+    drawVideoUnderlay(0.65 + 0.25 * a.rms, a, now);
+
+    // Continuous trickle + onset burst.
+    if (Math.random() < 0.4 + a.mid * 0.6) spawnZ(2 + ((a.density * 6) | 0), now);
+    if (a.onset) spawnZ(20 + ((a.onsetEnergy * 50) | 0), now);
+
+    const dt = Math.min(50, now - (drawZRush._t || now));
+    drawZRush._t = now;
+    const zKick = 1 + 4 * a.bass + 3 * (a.dBass || 0);
+    ctx.globalCompositeOperation = "lighter";
+    for (let i = zParts.length - 1; i >= 0; i--) {
+      const p = zParts[i];
+      const zPrev = p.z;
+      p.z -= p.zv * zKick * (dt / 16);
+      if (p.z < 0.01) { zParts.splice(i, 1); continue; }
+      // Project: x,y grow as 1/z (perspective).
+      const persp = 1 / p.z;
+      const persp0 = 1 / zPrev;
+      const rPx = p.r * Math.min(w, h);
+      const x  = cx + Math.cos(p.ang) * rPx * persp;
+      const y  = cy + Math.sin(p.ang) * rPx * persp;
+      const x0 = cx + Math.cos(p.ang) * rPx * persp0;
+      const y0 = cy + Math.sin(p.ang) * rPx * persp0;
+      if (x < -50 || x > w + 50 || y < -50 || y > h + 50) {
+        zParts.splice(i, 1); continue;
+      }
+      const lw = Math.max(1, (1 - p.z) * 6 * dpr);
+      const alpha = Math.min(1, (1 - p.z) * 1.2);
+      ctx.strokeStyle = rgba(pal[p.ci % 3], alpha * (0.5 + 0.5 * params.glow));
+      ctx.lineWidth = lw;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    }
+    ctx.globalCompositeOperation = "source-over";
+
+    // Centre vanishing-point flash on onset.
+    if (a.onset) {
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(w, h) * 0.5);
+      g.addColorStop(0, rgba(pal[3], 0.5 * a.onsetEnergy));
+      g.addColorStop(0.3, rgba(pal[0], 0.15 * a.onsetEnergy));
+      g.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, w, h);
+    }
+  }
+
   // ───────────── auto-cycle ─────────────
   let lastModeSwitch = performance.now();
   function maybeAutoSwitch(now) {
@@ -461,16 +839,30 @@
 
     maybeAutoSwitch(now);
 
-    fade(a);
+    const isProcess = PROCESS_MODES.has(params.mode);
+    if (isProcess) {
+      // Process modes own the full paint — no fade trail, no underlay,
+      // they consume the bg-video pixels directly.
+    } else {
+      fade(a);
+      // Audio-modulated infinite-zoom video bed under generative graphics.
+      // Opacity rides RMS so the bed gets thicker as the track gets denser.
+      drawVideoUnderlay(0.30 + 0.35 * a.rms, a, now);
+    }
 
     switch (params.mode) {
-      case "SHARDS": drawShards(a, pal, now); break;
-      case "PULSE":  drawPulse (a, pal, now, fft); break;
-      case "FIELD":  drawField (a, pal, now); break;
-      case "TUNNEL": drawTunnel(a, pal, now); break;
-      case "MOSAIC": drawMosaic(a, pal, now, fft); break;
-      case "STROBE": drawStrobe(a, pal, now); break;
-      default:       drawPulse (a, pal, now, fft); break;
+      case "ASCII":   drawAscii   (a, pal, now); break;
+      case "SORT":    drawSort    (a, pal, now); break;
+      case "HALFTONE":drawHalftone(a, pal, now); break;
+      case "DATAMOSH":drawDatamosh(a, pal, now); break;
+      case "ZRUSH":   drawZRush   (a, pal, now); break;
+      case "SHARDS":  drawShards  (a, pal, now); break;
+      case "PULSE":   drawPulse   (a, pal, now, fft); break;
+      case "FIELD":   drawField   (a, pal, now); break;
+      case "TUNNEL":  drawTunnel  (a, pal, now); break;
+      case "MOSAIC":  drawMosaic  (a, pal, now, fft); break;
+      case "STROBE":  drawStrobe  (a, pal, now); break;
+      default:        drawPulse   (a, pal, now, fft); break;
     }
 
     // Onset-triggered chromatic flash (cheap fullscreen tint).
